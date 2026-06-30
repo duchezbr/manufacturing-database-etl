@@ -13,7 +13,7 @@ DB_PATH = r".\database\manufacturing.duckdb"
 #%% Load Data
 
 df = pd.read_csv(
-    r".\mock_process_data.csv"
+    r".\mock_historical_data.csv"
 )
 
 df["DoM"] = pd.to_datetime(df["DoM"])
