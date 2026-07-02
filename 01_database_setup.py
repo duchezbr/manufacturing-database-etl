@@ -14,7 +14,7 @@ import duckdb
 #%%
 
 # Create database
-DB_PATH = r".\database\manufacturing.duckdb"
+DB_PATH = r".\manufacturing.duckdb"
 
 
 #%%
@@ -191,7 +191,7 @@ CREATE TABLE mfg.batch (
     batch_id INTEGER PRIMARY KEY
         DEFAULT nextval('mfg.batch_seq'),
 
-    batch_name VARCHAR,
+    batch_name VARCHAR NOT NULL UNIQUE,
 
     dom DATE,
 
@@ -243,8 +243,8 @@ CREATE TABLE mfg.result (
 #%%
 
 
-con.sql("SHOW SCHEMAS").show()
-con.sql("SHOW TABLES FROM mfg").show()
+#con.sql("SHOW SCHEMAS").show()
+#con.sql("SHOW TABLES FROM mfg").show()
 
 
 #%%
