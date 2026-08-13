@@ -1,88 +1,137 @@
 # -*- coding: utf-8 -*-
 """
-Manufacturing Database ETL
---------------------------
+02_initial_data_load.py
+-----------------------
 
-Loads manufacturing data from a consolidated flat file into the
-normalized DuckDB manufacturing database.
+Purpose
+-------
+Performs the initial migration of historical manufacturing data from a
+consolidated flat file into the normalized DuckDB manufacturing database.
 
-Source:
+This script represents the initial database population step that would
+typically occur before recurring incremental batch submissions are processed.
+
+Source
+------
     mock_historical_data.csv
 
-Destination:
-    manufacturing.duckdb
+Expected source columns
+-----------------------
+    Batch Name
+    Manufacturer
+    DoM
+    Process
+    Unit Operation
+    Parameter
+    Value
 
-The source file represents manufacturing data that has been
-consolidated from multiple business units. Each business unit
-maintains information related to its respective manufacturing
-activities, and the resulting flat file contains the combined
-dataset used by this ETL process.
+Migration approach
+------------------
+The historical source is intentionally represented as a flat file containing
+business-friendly identifiers.
 
-The ETL process separates the flat-file data into normalized
-database tables and establishes the appropriate relationships
-between manufacturers, processes, unit operations, parameters,
-batches, and results.
+The migration separates that source into the normalized database structure:
 
-@author: duchez
+    Manufacturer
+    Process
+    Unit Operation
+    Parameter
+    Batch
+    Result
+
+Business identifiers from the source file are used to resolve the appropriate
+surrogate keys before transactional Result records are inserted.
+
+For example:
+
+    Process + Unit Operation
+        -> unit_operation_id
+
+    Unit Operation + Parameter
+        -> parameter_id
+
+    Batch Name
+        -> batch_id
+
+The final Result table therefore stores relationships through foreign keys
+rather than repeatedly storing descriptive manufacturing metadata.
+
+This script is designed to be safely rerunnable. Existing reference and
+transactional records are not duplicated because the inserts check for
+existing business keys.
+
+A transaction is used so that a failure during migration does not leave the
+database partially populated.
 """
 
-import pandas as pd
+from pathlib import Path
 import duckdb
+import pandas as pd
 
 
-#%% ============================================================
-# 1. Define Database Location
 # ==============================================================
-# Define the location of the DuckDB database created by the
-# database setup script.
-#
-# This script assumes that the database structure has already
-# been created and that the mfg schema and its tables exist.
+# 1. CONFIGURATION
 # ==============================================================
 
-DB_PATH = r".\manufacturing.duckdb"
+DB_PATH = Path(r".\manufacturing.duckdb")
+SOURCE_FILE = Path(r".\mock_historical_data.csv")
+
+REQUIRED_COLUMNS = {
+    "Batch Name",
+    "Manufacturer",
+    "DoM",
+    "Process",
+    "Unit Operation",
+    "Parameter",
+    "Value",
+}
 
 
-#%% ============================================================
-# 2. Load Source Data
 # ==============================================================
-# Read the consolidated manufacturing flat file into a pandas
-# DataFrame.
-#
-# The source file represents data that has been combined from
-# multiple business units into a single historical dataset.
-#
-# The DoM (Date of Manufacture) column is explicitly converted
-# from text into a pandas datetime value so that it can be loaded
-# into the DuckDB DATE column in mfg.batch.
-# ==============================================================
-
-df = pd.read_csv(
-    r".\mock_historical_data.csv"
-)
-
-df["DoM"] = pd.to_datetime(df["DoM"])
-
-
-#%% ============================================================
-# 3. Populate Manufacturer Table
-# ==============================================================
-# Extract the unique manufacturers from the source data.
-#
-# The source column "Manufacturer" is renamed to "name" because
-# the destination table uses "name" as its column name.
-#
-# drop_duplicates() ensures that each manufacturer is considered
-# only once during the load.
-#
-# The NOT IN condition prevents a manufacturer already present in
-# the database from being inserted again.
-#
-# This allows the ETL process to be rerun without duplicating
-# existing manufacturers.
+# 2. LOAD SOURCE DATA
 # ==============================================================
 
-with duckdb.connect(DB_PATH) as conn:
+if not SOURCE_FILE.exists():
+    raise FileNotFoundError(
+        f"Source file not found: {SOURCE_FILE.resolve()}"
+    )
+
+df = pd.read_csv(SOURCE_FILE)
+
+missing_columns = REQUIRED_COLUMNS.difference(df.columns)
+
+if missing_columns:
+    raise ValueError(
+        "Source file is missing required columns: "
+        + ", ".join(sorted(missing_columns))
+    )
+
+# Keep DoM as text during extraction so that the database load controls
+# conversion to DATE using the same MM/DD/YYYY format expected by the
+# recurring validation/load pipeline.
+df["DoM"] = df["DoM"].astype("string").str.strip()
+
+print(f"Source file: {SOURCE_FILE.resolve()}")
+print(f"Source records: {len(df)}")
+
+
+# ==============================================================
+# 3. CONNECT AND BEGIN TRANSACTION
+# ==============================================================
+
+con = duckdb.connect(str(DB_PATH))
+
+con.execute("BEGIN TRANSACTION")
+
+try:
+
+    # ==========================================================
+    # 4. LOAD MANUFACTURERS
+    # ==========================================================
+
+    # Extract the unique manufacturer values from the flat source.
+    # Manufacturer is reference/master data and is therefore loaded
+    # independently of individual batches or results.
 
     manufacturers = (
         df[["Manufacturer"]]
@@ -90,9 +139,9 @@ with duckdb.connect(DB_PATH) as conn:
         .rename(columns={"Manufacturer": "name"})
     )
 
-    conn.register("manufacturers_df", manufacturers)
+    con.register("manufacturers_df", manufacturers)
 
-    conn.execute("""
+    con.execute("""
         INSERT INTO mfg.manufacturer (
             name,
             created_at,
@@ -103,27 +152,19 @@ with duckdb.connect(DB_PATH) as conn:
             CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP
         FROM manufacturers_df
-        WHERE name NOT IN (
-            SELECT name
-            FROM mfg.manufacturer
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM mfg.manufacturer AS m
+            WHERE m.name = manufacturers_df.name
         )
     """)
 
+    # ==========================================================
+    # 5. LOAD PROCESSES
+    # ==========================================================
 
-#%% ============================================================
-# 4. Populate Process Table
-# ==============================================================
-# Extract the unique manufacturing processes from the source
-# data.
-#
-# process_name is the corresponding destination column in
-# mfg.process.
-#
-# The NOT IN condition prevents processes that already exist in
-# the database from being inserted again.
-# ==============================================================
-
-with duckdb.connect(DB_PATH) as conn:
+    # Processes are also reference/master data and are loaded before
+    # Unit Operations because Unit Operations contain a Process foreign key.
 
     processes = (
         df[["Process"]]
@@ -131,9 +172,9 @@ with duckdb.connect(DB_PATH) as conn:
         .rename(columns={"Process": "process_name"})
     )
 
-    conn.register("processes_df", processes)
+    con.register("processes_df", processes)
 
-    conn.execute("""
+    con.execute("""
         INSERT INTO mfg.process (
             process_name,
             created_at,
@@ -144,43 +185,30 @@ with duckdb.connect(DB_PATH) as conn:
             CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP
         FROM processes_df
-        WHERE process_name NOT IN (
-            SELECT process_name
-            FROM mfg.process
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM mfg.process AS p
+            WHERE p.process_name = processes_df.process_name
         )
     """)
 
+    # ==========================================================
+    # 6. LOAD UNIT OPERATIONS
+    # ==========================================================
 
-#%% ============================================================
-# 5. Populate Unit Operation Table
-# ==============================================================
-# Extract unique Process / Unit Operation combinations.
-#
-# A unit operation belongs to a specific process, so the source
-# Process value is used to locate the corresponding process_id.
-#
-# The process_id is then stored as a foreign key in
-# mfg.unit_operation.
-#
-# NOT EXISTS prevents the same unit operation from being inserted
-# more than once for the same process.
-#
-# This is important because a unit operation name by itself may
-# not be globally unique. The meaningful business key is:
-#
-#     process + unit operation
-# ==============================================================
-
-with duckdb.connect(DB_PATH) as conn:
+    # A Unit Operation belongs to a Process.
+    #
+    # The source therefore needs both values to resolve the appropriate
+    # process_id before the Unit Operation can be inserted.
 
     unit_ops = (
         df[["Process", "Unit Operation"]]
         .drop_duplicates()
     )
 
-    conn.register("unit_ops_df", unit_ops)
+    con.register("unit_ops_df", unit_ops)
 
-    conn.execute("""
+    con.execute("""
         INSERT INTO mfg.unit_operation (
             process_id,
             unit_operation_name,
@@ -192,52 +220,34 @@ with duckdb.connect(DB_PATH) as conn:
             u."Unit Operation",
             CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP
-        FROM unit_ops_df u
-
-        JOIN mfg.process p
+        FROM unit_ops_df AS u
+        JOIN mfg.process AS p
             ON u.Process = p.process_name
-
         WHERE NOT EXISTS (
             SELECT 1
-            FROM mfg.unit_operation existing
+            FROM mfg.unit_operation AS existing
             WHERE existing.process_id = p.process_id
               AND existing.unit_operation_name = u."Unit Operation"
         )
     """)
 
+    # ==========================================================
+    # 7. LOAD PARAMETERS
+    # ==========================================================
 
-#%% ============================================================
-# 6. Populate Parameter Table
-# ==============================================================
-# Extract unique Process / Unit Operation / Parameter combinations.
-#
-# Parameters belong to a specific unit operation, which in turn
-# belongs to a process.
-#
-# The joins resolve the source business names into the surrogate
-# primary keys used by the normalized database.
-#
-# The resulting unit_operation_id is stored as a foreign key in
-# mfg.parameter.
-#
-# NOT EXISTS prevents duplicate parameters from being inserted
-# for the same unit operation.
-#
-# The effective business key is:
-#
-#     unit operation + parameter
-# ==============================================================
-
-with duckdb.connect(DB_PATH) as conn:
+    # Parameters belong to Unit Operations.
+    #
+    # The Process and Unit Operation values from the source are therefore
+    # used to resolve unit_operation_id before the Parameter is inserted.
 
     params = (
         df[["Process", "Unit Operation", "Parameter"]]
         .drop_duplicates()
     )
 
-    conn.register("params_df", params)
+    con.register("params_df", params)
 
-    conn.execute("""
+    con.execute("""
         INSERT INTO mfg.parameter (
             unit_operation_id,
             parameter_name,
@@ -249,62 +259,37 @@ with duckdb.connect(DB_PATH) as conn:
             p."Parameter",
             CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP
-
-        FROM params_df p
-
-        JOIN mfg.process pr
+        FROM params_df AS p
+        JOIN mfg.process AS pr
             ON p.Process = pr.process_name
-
-        JOIN mfg.unit_operation u
+        JOIN mfg.unit_operation AS u
             ON u.process_id = pr.process_id
            AND u.unit_operation_name = p."Unit Operation"
-
         WHERE NOT EXISTS (
             SELECT 1
-            FROM mfg.parameter existing
+            FROM mfg.parameter AS existing
             WHERE existing.unit_operation_id = u.unit_operation_id
               AND existing.parameter_name = p."Parameter"
         )
     """)
 
+    # ==========================================================
+    # 8. LOAD BATCHES
+    # ==========================================================
 
-#%% ============================================================
-# 7. Populate Batch Table
-# ==============================================================
-# Extract unique batches from the source data.
-#
-# Only Batch Name, Manufacturer, and DoM are required because
-# mfg.batch does not contain a process_id.
-#
-# The source Manufacturer name is joined to mfg.manufacturer to
-# retrieve the manufacturer's surrogate primary key.
-#
-# That manufacturer_id is then stored as a foreign key in
-# mfg.batch.
-#
-# NOT EXISTS prevents an existing batch from being inserted again.
-#
-# The batch_name column is also defined as UNIQUE in the database,
-# providing an additional database-level protection against
-# duplicate batches.
-# ==============================================================
-
-with duckdb.connect(DB_PATH) as conn:
+    # Batch Name is the business identifier for the manufacturing batch.
+    #
+    # Manufacturer is converted to manufacturer_id through the reference
+    # table rather than storing the Manufacturer text directly in Batch.
 
     batches = (
-        df[
-            [
-                "Batch Name",
-                "Manufacturer",
-                "DoM"
-            ]
-        ]
+        df[["Batch Name", "Manufacturer", "DoM"]]
         .drop_duplicates()
     )
 
-    conn.register("batches_df", batches)
+    con.register("batches_df", batches)
 
-    conn.execute("""
+    con.execute("""
         INSERT INTO mfg.batch (
             batch_name,
             manufacturer_id,
@@ -315,68 +300,40 @@ with duckdb.connect(DB_PATH) as conn:
         SELECT
             b."Batch Name",
             m.manufacturer_id,
-            b.DoM,
+            TRY_STRPTIME(
+                TRIM(b.DoM),
+                '%m/%d/%Y'
+            ),
             CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP
-
-        FROM batches_df b
-
-        JOIN mfg.manufacturer m
+        FROM batches_df AS b
+        JOIN mfg.manufacturer AS m
             ON b.Manufacturer = m.name
-
         WHERE NOT EXISTS (
             SELECT 1
-            FROM mfg.batch existing
+            FROM mfg.batch AS existing
             WHERE existing.batch_name = b."Batch Name"
         )
     """)
 
+    # ==========================================================
+    # 9. LOAD RESULTS
+    # ==========================================================
 
-#%% ============================================================
-# 8. Populate Results Table
-# ==============================================================
-# Load the source DataFrame into DuckDB and use the relationships
-# established in the previous steps to resolve the appropriate
-# surrogate keys.
-#
-# The source data contains business-friendly identifiers:
-#
-#     Batch Name
-#     Process
-#     Unit Operation
-#     Parameter
-#
-# The normalized result table instead stores:
-#
-#     batch_id
-#     parameter_id
-#
-# The joins progressively resolve those business identifiers:
-#
-#     Batch Name
-#          ↓
-#     batch_id
-#
-#     Process + Unit Operation
-#          ↓
-#     unit_operation_id
-#
-#     Unit Operation + Parameter
-#          ↓
-#     parameter_id
-#
-# NOT EXISTS prevents a result from being inserted if that
-# batch/parameter combination already exists.
-#
-# This is consistent with the UNIQUE(batch_id, parameter_id)
-# constraint defined on mfg.result.
-# ==============================================================
+    # Result records connect a Batch to a Parameter.
+    #
+    # The source contains business-friendly identifiers, so the load
+    # resolves:
+    #
+    #     Batch Name -> batch_id
+    #
+    #     Process + Unit Operation + Parameter -> parameter_id
+    #
+    # before inserting the result.
 
-with duckdb.connect(DB_PATH) as conn:
+    con.register("results_df", df)
 
-    conn.register("results_df", df)
-
-    conn.execute("""
+    con.execute("""
         INSERT INTO mfg.result (
             batch_id,
             parameter_id,
@@ -390,47 +347,87 @@ with duckdb.connect(DB_PATH) as conn:
             r.Value,
             CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP
-
-        FROM results_df r
-
-        JOIN mfg.batch b
+        FROM results_df AS r
+        JOIN mfg.batch AS b
             ON r."Batch Name" = b.batch_name
-
-        JOIN mfg.process pr
+        JOIN mfg.process AS pr
             ON r.Process = pr.process_name
-
-        JOIN mfg.unit_operation u
+        JOIN mfg.unit_operation AS u
             ON u.process_id = pr.process_id
            AND u.unit_operation_name = r."Unit Operation"
-
-        JOIN mfg.parameter p
+        JOIN mfg.parameter AS p
             ON p.unit_operation_id = u.unit_operation_id
            AND p.parameter_name = r.Parameter
-
         WHERE NOT EXISTS (
             SELECT 1
-            FROM mfg.result existing
+            FROM mfg.result AS existing
             WHERE existing.batch_id = b.batch_id
               AND existing.parameter_id = p.parameter_id
         )
     """)
 
+    # ==========================================================
+    # 10. LOAD SUMMARY
+    # ==========================================================
 
-#%% ============================================================
-# 9. Close Database Connections
-# ==============================================================
-# Each ETL block uses a context manager:
-#
-#     with duckdb.connect(DB_PATH) as conn:
-#
-# The connection is therefore automatically closed when the block
-# finishes.
-#
-# No explicit conn.close() is required for these blocks.
-#
-# The database remains stored on disk at DB_PATH and can be
-# accessed by subsequent Python scripts, Power BI, or other tools.
-# ==============================================================
+    manufacturer_count = con.execute(
+        "SELECT COUNT(*) FROM mfg.manufacturer"
+    ).fetchone()[0]
 
-print("ETL load completed successfully.")
+    process_count = con.execute(
+        "SELECT COUNT(*) FROM mfg.process"
+    ).fetchone()[0]
 
+    unit_operation_count = con.execute(
+        "SELECT COUNT(*) FROM mfg.unit_operation"
+    ).fetchone()[0]
+
+    parameter_count = con.execute(
+        "SELECT COUNT(*) FROM mfg.parameter"
+    ).fetchone()[0]
+
+    batch_count = con.execute(
+        "SELECT COUNT(*) FROM mfg.batch"
+    ).fetchone()[0]
+
+    result_count = con.execute(
+        "SELECT COUNT(*) FROM mfg.result"
+    ).fetchone()[0]
+
+    # ==========================================================
+    # 11. COMMIT INITIAL MIGRATION
+    # ==========================================================
+
+    con.execute("COMMIT")
+
+    print("\n==============================================")
+    print("INITIAL LOAD SUMMARY")
+    print("==============================================")
+    print(f"Manufacturers:    {manufacturer_count}")
+    print(f"Processes:        {process_count}")
+    print(f"Unit operations:  {unit_operation_count}")
+    print(f"Parameters:       {parameter_count}")
+    print(f"Batches:          {batch_count}")
+    print(f"Results:          {result_count}")
+    print("==============================================")
+    print("Initial data migration completed successfully.")
+
+except Exception:
+
+    # Roll back the entire migration if any stage fails.
+    #
+    # This prevents a partial initial load in which some reference tables
+    # have been populated while later tables remain incomplete.
+
+    con.execute("ROLLBACK")
+
+    print(
+        "ERROR: Initial data migration failed. "
+        "Transaction rolled back."
+    )
+
+    raise
+
+finally:
+
+    con.close()
