@@ -13,7 +13,7 @@ Business process
 Business units submit standardized CSV files containing manufacturing
 parameter data. Files are placed in:
 
-    ./batch_data_uploads/
+    batch_data_uploads/
 
 The files may contain records for:
 
@@ -105,8 +105,16 @@ import pandas as pd
 # 1. CONFIGURATION
 # ==============================================================
 
-DB_PATH = Path(r".\manufacturing.duckdb")
-UPLOAD_FOLDER = Path(r".\batch_data_uploads")
+# Determine the repository/project root from the location of this script.
+#
+# __file__ = scripts/03_validate_batch_data.py
+# .parent  = scripts/
+# .parent  = manufacturing-database-etl/
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+DB_PATH = PROJECT_ROOT / "manufacturing.duckdb"
+UPLOAD_FOLDER = PROJECT_ROOT / "batch_data_uploads"
 
 REQUIRED_COLUMNS = {
     "Batch Name",
@@ -117,7 +125,6 @@ REQUIRED_COLUMNS = {
     "Parameter",
     "Value",
 }
-
 
 # ==============================================================
 # 2. DISCOVER SOURCE FILES

@@ -73,8 +73,16 @@ import pandas as pd
 # 1. CONFIGURATION
 # ==============================================================
 
-DB_PATH = Path(r".\manufacturing.duckdb")
-SOURCE_FILE = Path(r".\mock_historical_data.csv")
+# Determine the repository/project root from the location of this script.
+#
+# __file__ = scripts/02_load_historical_data.py
+# .parent  = scripts/
+# .parent  = manufacturing-database-etl/
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+DB_PATH = PROJECT_ROOT / "manufacturing.duckdb"
+SOURCE_FILE = PROJECT_ROOT / "historical_data" / "mock_historical_data.csv"
 
 REQUIRED_COLUMNS = {
     "Batch Name",
@@ -85,7 +93,6 @@ REQUIRED_COLUMNS = {
     "Parameter",
     "Value",
 }
-
 
 # ==============================================================
 # 2. LOAD SOURCE DATA
@@ -109,6 +116,7 @@ if missing_columns:
 # Keep DoM as text during extraction so that the database load controls
 # conversion to DATE using the same MM/DD/YYYY format expected by the
 # recurring validation/load pipeline.
+
 df["DoM"] = df["DoM"].astype("string").str.strip()
 
 print(f"Source file: {SOURCE_FILE.resolve()}")

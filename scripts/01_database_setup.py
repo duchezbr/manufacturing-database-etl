@@ -110,20 +110,28 @@ import duckdb
 # 1. CONFIGURATION
 # ==============================================================
 
-DB_PATH = Path(r".\manufacturing.duckdb")
+# Determine the repository/project root from the location of this script.
+#
+# __file__ = scripts/01_database_setup.py
+# .parent  = scripts/
+# .parent  = manufacturing-database-etl/
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+DB_PATH = PROJECT_ROOT / "manufacturing.duckdb"
 
 # Demonstration/development control.
 #
 # True:
-#     Delete the existing database and rebuild it.
+# Delete the existing database and rebuild it.
 #
 # False:
-#     Preserve the existing database and raise an error if it already exists.
+# Preserve the existing database and raise an error if it already exists.
 #
 # This allows the database to be intentionally rebuilt while preventing an
 # accidental overwrite when RESET_DATABASE is False.
-RESET_DATABASE = True
 
+RESET_DATABASE = True
 
 # ==============================================================
 # 2. RESET DATABASE
@@ -140,7 +148,6 @@ if DB_PATH.exists():
     DB_PATH.unlink()
 
     print(f"Existing database removed: {DB_PATH.resolve()}")
-
 
 # ==============================================================
 # 3. CREATE DATABASE AND SCHEMA

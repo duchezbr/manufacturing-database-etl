@@ -66,6 +66,7 @@ If an unexpected exception occurs, the entire transaction is rolled back to
 prevent a partially completed load.
 """
 
+from pathlib import Path
 import duckdb
 
 
@@ -73,7 +74,15 @@ import duckdb
 # 1. CONFIGURATION
 # ==============================================================
 
-DB_PATH = r".\manufacturing.duckdb"
+# Determine the repository/project root from the location of this script.
+#
+# __file__ = scripts/04_batch_load_etl.py
+# .parent  = scripts/
+# .parent  = manufacturing-database-etl/
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+DB_PATH = PROJECT_ROOT / "manufacturing.duckdb"
 
 # --------------------------------------------------------------
 # LOAD CONTROL
