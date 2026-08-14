@@ -1,1 +1,12 @@
-
+Batch Name,Process,Manufacturer,DoM,Unit Operation,Parameter,Value
+A0037,Core Production Process,Manufacturer_A,12/7/2026,A,Process Time,44.996
+A0037,Core Production Process,Manufacturer_A,12/7/2026,A,Temperature Index,100.636
+A0037,Core Production Process,Manufacturer_A,12/7/2026,A,Flow,12.027
+A0037,Core Production Process,Manufacturer_A,12/7/2026,A,Material Ratio,1.131
+A0037,Core Production Process,Manufacturer_A,12/7/2026,B,Mixing,348.436
+A0037,Core Production Process,Manufacturer_A,12/7/2026,B,Hold Duration,91.713
+A0037,Core Production Process,Manufacturer_A,12/7/2026,B,Energy Input,1702.719
+A0037,Core Production Process,Manufacturer_A,12/7/2026,B,Transfer Velocity,9.075
+B0025,Core Process,Manufacturer_B,9/3/2026,A,Temperature Index,108.188
+B0025,Core Process,Manufacturer_B,9/3/2026,A,Flow Setting,13.883
+B0025,Core Process,Manufacturer_B,9/3/2026,A,Material Ratio,2.299
